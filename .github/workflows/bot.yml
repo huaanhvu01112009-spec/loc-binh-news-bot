@@ -1,7 +1,8 @@
-name: Lộc Bình News Bot
+name: Loc Binh News Bot
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "*/5 * * * *"
     - cron: "0 0 * * *"
@@ -9,34 +10,42 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: loc-binh-news
+  cancel-in-progress: false
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
 
     steps:
-      - name: Tải mã nguồn
+
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cài Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Cài thư viện
+      - name: Install libraries
         run: |
           pip install -r requirements.txt
 
-      - name: Chạy bot
+      - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DAILY_NEWS: ${{ github.event.schedule == '0 0 * * *' && '1' || '0' }}
         run: |
           python bot.py
 
-      - name: Lưu dữ liệu bot
+      - name: Save bot data
         run: |
           git config user.name "loc-binh-news-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add .
+
+          git add subscribers.json last_update_id.txt
+
           git diff --cached --quiet || git commit -m "Update bot data"
+
           git push
