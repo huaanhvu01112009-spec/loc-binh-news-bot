@@ -1,6 +1,5 @@
 import os
 import json
-import time
 import requests
 import feedparser
 from datetime import datetime, timezone, timedelta
@@ -11,8 +10,11 @@ if not TOKEN:
     raise RuntimeError("Không tìm thấy TELEGRAM_BOT_TOKEN")
 
 API = f"https://api.telegram.org/bot{TOKEN}"
+
 DATA_FILE = "subscribers.json"
 UPDATE_FILE = "last_update_id.txt"
+
+VN = timezone(timedelta(hours=7))
 
 RSS_URLS = [
     "https://news.google.com/rss/search?q=Lộc+Bình+Lạng+Sơn&hl=vi&gl=VN&ceid=VN:vi",
@@ -20,16 +22,14 @@ RSS_URLS = [
     "https://news.google.com/rss/search?q=Chi+Ma+Lạng+Sơn&hl=vi&gl=VN&ceid=VN:vi",
 ]
 
-VN = timezone(timedelta(hours=7))
-
 
 def telegram(method, data=None):
-    r = requests.post(
+    response = requests.post(
         f"{API}/{method}",
         data=data or {},
         timeout=30
     )
-    return r.json()
+    return response.json()
 
 
 def load_subscribers():
@@ -39,7 +39,7 @@ def load_subscribers():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return []
 
 
@@ -55,7 +55,7 @@ def get_last_update():
     try:
         with open(UPDATE_FILE, "r") as f:
             return int(f.read().strip())
-    except:
+    except Exception:
         return 0
 
 
@@ -87,6 +87,7 @@ def get_news():
             print("RSS ERROR:", e)
 
     unique = {}
+
     for article in articles:
         unique[article["link"]] = article
 
@@ -103,14 +104,177 @@ def send_news(chat_id):
             "sendMessage",
             {
                 "chat_id": chat_id,
-                "text": f"📰 BẢN TIN LỘC BÌNH\n📅 {today}\n\nChưa tìm thấy tin mới."
+                "text": (
+                    f"📰 BẢN TIN LỘC BÌNH\n"
+                    f"📅 {today}\n\n"
+                    "Chưa tìm thấy tin mới."
+                )
             }
         )
         return
 
-    text = f"📰 <b>BẢN TIN LỘC BÌNH</b>\n📅 {today}\n\n"
+    text = (
+        f"📰 <b>BẢN TIN LỘC BÌNH</b>\n"
+        f"📅 {today}\n\n"
+    )
 
     for i, article in enumerate(articles[:7], 1):
         text += (
             f"{i}. <b>{article['title']}</b>\n"
-            f"🔗 {article['link']}\
+            f"🔗 {article['link']}\n\n"
+        )
+
+    telegram(
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true"
+        }
+    )
+
+
+def handle_message(message):
+    chat = message.get("chat", {})
+    chat_id = chat.get("id")
+
+    if not chat_id:
+        return
+
+    text = message.get("text", "").strip()
+
+    subscribers = load_subscribers()
+
+    if text.startswith("/start"):
+
+        if chat_id not in subscribers:
+            subscribers.append(chat_id)
+            save_subscribers(subscribers)
+
+        telegram(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": (
+                    "👋 <b>Xin chào!</b>\n\n"
+                    "🤖 <b>LỘC BÌNH NEWS BOT</b>\n\n"
+                    "Bot cập nhật tin tức Lộc Bình – Lạng Sơn.\n\n"
+                    "📰 /news - Tin mới nhất\n"
+                    "🔔 /subscribe - Nhận bản tin mỗi ngày\n"
+                    "🔕 /unsubscribe - Tắt bản tin\n"
+                    "ℹ️ /help - Trợ giúp"
+                ),
+                "parse_mode": "HTML"
+            }
+        )
+
+    elif text.startswith("/news"):
+        send_news(chat_id)
+
+    elif text.startswith("/today"):
+        send_news(chat_id)
+
+    elif text.startswith("/subscribe"):
+
+        if chat_id not in subscribers:
+            subscribers.append(chat_id)
+            save_subscribers(subscribers)
+
+        telegram(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": "🔔 Đã bật nhận bản tin mỗi ngày!"
+            }
+        )
+
+    elif text.startswith("/unsubscribe"):
+
+        if chat_id in subscribers:
+            subscribers.remove(chat_id)
+            save_subscribers(subscribers)
+
+        telegram(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": "🔕 Đã tắt nhận bản tin."
+            }
+        )
+
+    elif text.startswith("/help"):
+
+        telegram(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": (
+                    "ℹ️ <b>HƯỚNG DẪN</b>\n\n"
+                    "/start - Bắt đầu\n"
+                    "/news - Tin mới nhất\n"
+                    "/today - Bản tin hôm nay\n"
+                    "/subscribe - Nhận tin mỗi ngày\n"
+                    "/unsubscribe - Tắt tin"
+                ),
+                "parse_mode": "HTML"
+            }
+        )
+
+
+def check_updates():
+    last_update = get_last_update()
+
+    result = telegram(
+        "getUpdates",
+        {
+            "offset": last_update + 1,
+            "timeout": 5,
+            "allowed_updates": json.dumps(["message"])
+        }
+    )
+
+    if not result.get("ok"):
+        print("Telegram ERROR:", result)
+        return
+
+    updates = result.get("result", [])
+
+    newest = last_update
+
+    for update in updates:
+
+        update_id = update.get("update_id", 0)
+
+        if update_id > newest:
+            newest = update_id
+
+        message = update.get("message")
+
+        if message:
+            handle_message(message)
+
+    if newest != last_update:
+        save_last_update(newest)
+
+
+def main():
+    print("🤖 Lộc Bình News Bot đang chạy...")
+
+    me = telegram("getMe")
+
+    if me.get("ok"):
+        username = me["result"].get("username")
+        print(f"✅ Telegram kết nối thành công: @{username}")
+    else:
+        print("❌ Không thể kết nối Telegram")
+        print(me)
+        return
+
+    check_updates()
+
+    print("✅ Bot đã hoàn thành lần kiểm tra.")
+
+
+if __name__ == "__main__":
+    main()
